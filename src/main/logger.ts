@@ -7,10 +7,16 @@ type LogLevel = 'INFO' | 'WARN' | 'ERROR'
 
 let logFile = ''
 
+function redactSecrets(value: string): string {
+  return value
+    .replace(/(_v2)[A-Za-z0-9+/=_-]{20,}/g, '$1***REDACTED***')
+    .replace(/((?:ROBONEO_ACCESS_KEY|Access-Token|access-token)\s*[=:]\s*)[^\s,}]+/gi, '$1***REDACTED***')
+}
+
 function formatValue(value: unknown): string {
-  if (value instanceof Error) return value.stack || value.message
-  if (typeof value === 'string') return value
-  return inspect(value, { depth: 5, breakLength: 140 })
+  if (value instanceof Error) return redactSecrets(value.stack || value.message)
+  if (typeof value === 'string') return redactSecrets(value)
+  return redactSecrets(inspect(value, { depth: 5, breakLength: 140 }))
 }
 
 async function write(level: LogLevel, scope: string, values: unknown[]): Promise<void> {

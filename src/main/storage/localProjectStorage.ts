@@ -28,6 +28,21 @@ async function readJson<T>(file: string, fallback: T): Promise<T> {
   }
 }
 
+function normalizeAccessKey(value: string): string {
+  let key = value.trim()
+  const configMatch = key.match(/roboneo\s+config\s+access_token\s+["']?([^"'\s]+)["']?/i)
+  if (configMatch) return configMatch[1]
+  const envMatch = key.match(/(?:export\s+)?ROBONEO_ACCESS_KEY\s*=\s*["']?([^"'\s]+)["']?/i)
+  if (envMatch) return envMatch[1]
+  key = key.replace(/^["']|["']$/g, '')
+  if (/^npm\s+\S+$/i.test(key)) key = key.replace(/^npm\s+/i, '')
+  return key.trim()
+}
+
+function redactSecrets(value: string): string {
+  return value.replace(/(_v2)[A-Za-z0-9+/=_-]{20,}/g, '$1***REDACTED***')
+}
+
 export class LocalProjectStorage {
   private root = path.join(os.homedir(), 'RoboNeoTikTokStudio')
   private projectsDir = path.join(this.root, 'projects')
@@ -197,7 +212,29 @@ export class LocalProjectStorage {
   }
 
   private async storedKeys(): Promise<StoredKey[]> {
-    return readJson<StoredKey[]>(path.join(this.configDir, 'keys.json'), [])
+    const file = path.join(this.configDir, 'keys.json')
+    const keys = await readJson<StoredKey[]>(file, [])
+    let changed = false
+    for (const key of keys) {
+      const decrypted = this.decrypt(key)
+      const normalized = normalizeAccessKey(decrypted)
+      if (normalized && normalized !== decrypted) {
+        Object.assign(key, this.encrypt(normalized))
+        key.creditBalance = undefined
+        key.creditLoadedAt = undefined
+        key.creditError = 'API key was normalized after removing copied command text. Validate it again.'
+        changed = true
+      }
+      if (key.creditError) {
+        const redactedError = redactSecrets(key.creditError)
+        if (redactedError !== key.creditError) {
+          key.creditError = redactedError
+          changed = true
+        }
+      }
+    }
+    if (changed) await writeFile(file, JSON.stringify(keys, null, 2), 'utf8')
+    return keys
   }
 
   async listKeys(): Promise<MaskedApiKey[]> {
@@ -218,7 +255,10 @@ export class LocalProjectStorage {
     const keys = await this.storedKeys()
     const current = input.id ? keys.find((key) => key.id === input.id) : undefined
     if (!current && !input.apiKey) throw new Error('API key is required')
-    const encrypted = input.apiKey ? this.encrypt(input.apiKey.trim()) : {
+    const normalizedKey = input.apiKey ? normalizeAccessKey(input.apiKey) : undefined
+    if (input.apiKey && !normalizedKey) throw new Error('API key is empty after normalization')
+    if (normalizedKey && /\s/.test(normalizedKey)) throw new Error('API key must not contain whitespace')
+    const encrypted = normalizedKey ? this.encrypt(normalizedKey) : {
       encryptedKey: current!.encryptedKey,
       encryption: current!.encryption
     }
@@ -270,7 +310,7 @@ export class LocalProjectStorage {
     if (!key) throw new Error('API key not found')
     key.creditBalance = undefined
     key.creditLoadedAt = new Date().toISOString()
-    key.creditError = error
+    key.creditError = redactSecrets(error)
     await writeFile(path.join(this.configDir, 'keys.json'), JSON.stringify(keys, null, 2), 'utf8')
     return this.listKeys()
   }

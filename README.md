@@ -118,6 +118,8 @@ npm run dev
 
 In development, Chromium DevTools opens automatically. Use its **Console** for React/renderer errors and **Network** for Meitu/RoboNeo requests.
 
+Requests made with Electron `net.fetch` run in the main process and therefore do not appear in the renderer's Network tab. They are logged as redacted `[network]` entries in the terminal and `main.log`; access-token headers and account profile payloads are never logged.
+
 Main-process output and renderer console messages are also printed in the terminal that runs `npm run dev`. Persistent logs are written to:
 
 ```text
