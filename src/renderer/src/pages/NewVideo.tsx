@@ -164,12 +164,6 @@ export function NewVideo(): JSX.Element {
     icon: typeof Film;
   }> = [
     {
-      id: "motion_reference",
-      label: "Motion Reference",
-      description: "Character image + reference motion video",
-      icon: ImagePlay,
-    },
-    {
       id: "text_to_image",
       label: "Text to Image",
       description: "Generate a still image from your brief",
@@ -187,6 +181,12 @@ export function NewVideo(): JSX.Element {
       description: "Animate one or two reference images",
       icon: Sparkles,
     },
+    {
+      id: "motion_reference",
+      label: "Motion Reference",
+      description: "Character image + reference motion video",
+      icon: ImagePlay,
+    },
   ];
   const assetsValid =
     mode === "motion_reference"
@@ -194,6 +194,13 @@ export function NewVideo(): JSX.Element {
       : mode === "image_to_video"
         ? Boolean(project.assets.characterImage)
         : true;
+
+  const isVideoMode = [
+    "text_to_video",
+    "image_to_video",
+    "motion_reference",
+  ].includes(mode);
+
   return (
     <div className="space-y-7">
       <div>
@@ -322,25 +329,29 @@ export function NewVideo(): JSX.Element {
               }
             />
           </label>
-          <label className="space-y-2">
-            <span className="text-sm font-medium">Mood / style</span>
-            <Input
-              value={project.mood}
-              onChange={(event) => patch({ mood: event.target.value })}
-            />
-          </label>
-          <label className="space-y-2">
-            <span className="text-sm font-medium">Duration (seconds)</span>
-            <Input
-              type="number"
-              min={1}
-              max={60}
-              value={project.duration}
-              onChange={(event) =>
-                patch({ duration: Number(event.target.value) })
-              }
-            />
-          </label>
+          {isVideoMode && (
+            <label className="space-y-2">
+              <span className="text-sm font-medium">Mood / style</span>
+              <Input
+                value={project.mood}
+                onChange={(event) => patch({ mood: event.target.value })}
+              />
+            </label>
+          )}
+          {isVideoMode && (
+            <label className="space-y-2">
+              <span className="text-sm font-medium">Duration (seconds)</span>
+              <Input
+                type="number"
+                min={1}
+                max={60}
+                value={project.duration}
+                onChange={(event) =>
+                  patch({ duration: Number(event.target.value) })
+                }
+              />
+            </label>
+          )}
         </CardContent>
       </Card>
       <div className="flex justify-end">

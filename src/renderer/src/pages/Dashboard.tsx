@@ -44,7 +44,7 @@ export function Dashboard(): JSX.Element {
         </div>
         <Button asChild size="lg">
           <Link to="/new">
-            <Plus className="h-4 w-4" /> New video
+            <Plus className="h-4 w-4" /> New
           </Link>
         </Button>
       </div>
