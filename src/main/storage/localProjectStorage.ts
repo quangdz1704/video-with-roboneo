@@ -132,8 +132,15 @@ export class LocalProjectStorage {
       createdAt: project.createdAt || now,
       updatedAt: project.updatedAt || now,
       error: project.error,
+      lastSeq: project.lastSeq,
+      remoteHistory: project.remoteHistory,
       pendingReply: project.pendingReply
     }
+  }
+
+  async findProjectByRoomId(roomId: string): Promise<Project | null> {
+    const projects = await this.listProjects()
+    return projects.find((project) => project.roomId === roomId) || null
   }
 
   async createProject(input: Partial<Project>): Promise<Project> {
@@ -152,10 +159,17 @@ export class LocalProjectStorage {
       resolution: input.resolution || settings.defaultResolution,
       apiKeyId: input.apiKeyId,
       assets: input.assets || {},
-      status: 'draft',
-      outputFiles: [],
-      createdAt: now,
-      updatedAt: now
+      promptPack: input.promptPack,
+      finalPrompt: input.finalPrompt,
+      roomId: input.roomId,
+      status: input.status || 'draft',
+      outputFiles: input.outputFiles || [],
+      createdAt: input.createdAt || now,
+      updatedAt: input.updatedAt || now,
+      error: input.error,
+      lastSeq: input.lastSeq,
+      remoteHistory: input.remoteHistory,
+      pendingReply: input.pendingReply
     }
     await mkdir(path.join(this.projectDir(id), 'inputs'), { recursive: true })
     const saved = await this.saveProject(project)

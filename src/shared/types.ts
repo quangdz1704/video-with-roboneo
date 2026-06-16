@@ -56,11 +56,41 @@ export interface Project {
   createdAt: string
   updatedAt: string
   error?: string
+  lastSeq?: number
+  remoteHistory?: RemoteHistoryDetail
   pendingReply?: {
     requestId: string
     message?: string
     options?: string[]
   }
+}
+
+export interface RemoteHistoryRoom {
+  roomId: string
+  title: string
+  type?: string
+  coverUrl?: string
+  createdAt?: string
+  updatedAt?: string
+  raw: Record<string, unknown>
+}
+
+export interface RemoteHistoryDetail {
+  roomId: string
+  title?: string
+  maxSeq?: number
+  lastSeq?: number
+  nextAction?: string
+  message?: string
+  artifacts?: unknown[]
+  raw: Record<string, unknown>
+}
+
+export interface RemoteHistoryResult {
+  rooms: RemoteHistoryRoom[]
+  totalCount?: number
+  bottomDesc?: string
+  message: string
 }
 
 export interface AppSettings {
@@ -119,9 +149,12 @@ export interface RoboNeoBridge {
   deleteKey(id: string): Promise<MaskedApiKey[]>
   validateKey(id: string): Promise<{ ok: boolean; message: string }>
   loadKeyCredit(id: string): Promise<{ ok: boolean; balance?: string; message: string; keys: MaskedApiKey[] }>
+  listRemoteHistory(keyId?: string): Promise<RemoteHistoryResult>
+  importRemoteHistoryRoom(roomId: string, keyId?: string): Promise<Project>
   saveKeyToConfig(id: string): Promise<{ ok: boolean; message: string }>
   checkEnvironment(): Promise<{ node: { ok: boolean; version?: string }; cli: { ok: boolean; version?: string; installCommand: string } }>
   runProject(projectId: string): Promise<void>
+  continueProject(projectId: string): Promise<void>
   cancelProject(projectId: string): Promise<void>
   replyToProject(projectId: string, reply: string): Promise<void>
   openOutputFolder(projectId: string): Promise<void>

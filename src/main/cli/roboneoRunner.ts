@@ -2,11 +2,18 @@ import { readdir } from "node:fs/promises";
 import path from "node:path";
 import { shell, type BrowserWindow } from "electron";
 import { createHash } from "node:crypto";
-import type { JobState, JobStep, LogEntry, Project } from "../../shared/types";
+import type {
+  ApiKeyRecord,
+  JobState,
+  JobStep,
+  LogEntry,
+  Project,
+  RemoteHistoryDetail,
+  RemoteHistoryResult,
+  RemoteHistoryRoom,
+} from "../../shared/types";
 import { LocalProjectStorage } from "../storage/localProjectStorage";
-import { RoboNeoAccountClient } from "../api/roboneoAccountClient";
 import { ProcessManager, type CommandResult } from "./processManager";
-import { logger } from "../logger";
 
 type HistoryPayload = Record<string, unknown> & {
   next_action?: unknown;
@@ -18,6 +25,33 @@ type HistoryPayload = Record<string, unknown> & {
   message?: string;
   recharge_url?: string;
 };
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function findArray(value: unknown, keys: string[]): unknown[] | undefined {
+  const record = asRecord(value);
+  if (!record) return undefined;
+  for (const key of keys) {
+    const candidate = record[key];
+    if (Array.isArray(candidate)) return candidate;
+  }
+  for (const child of Object.values(record)) {
+    const match = findArray(child, keys);
+    if (match) return match;
+  }
+  return undefined;
+}
+
+function findNumber(value: unknown, keys: string[]): number | undefined {
+  const raw = findStringOrNumber(value, keys);
+  if (raw === undefined) return undefined;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
 
 function tokenFingerprint(token: string): string {
   return createHash("sha256").update(token).digest("hex").slice(0, 10);
@@ -72,6 +106,21 @@ function findString(value: unknown, keys: string[]): string | undefined {
   return undefined;
 }
 
+function findStringOrNumber(value: unknown, keys: string[]): string | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  for (const key of keys) {
+    const candidate = record[key];
+    if (typeof candidate === "string" || typeof candidate === "number")
+      return String(candidate);
+  }
+  for (const child of Object.values(record)) {
+    const match = findStringOrNumber(child, keys);
+    if (match) return match;
+  }
+  return undefined;
+}
+
 function historyPayload(value: Record<string, unknown>): HistoryPayload {
   const candidates = [value.data, value.result, value];
   return (candidates.find((item) => item && typeof item === "object") ||
@@ -111,9 +160,75 @@ function nextAction(payload: HistoryPayload): {
   };
 }
 
+function normalizeHistoryRoom(value: unknown): RemoteHistoryRoom | undefined {
+  const record = asRecord(value);
+  if (!record) return undefined;
+  const roomId = findStringOrNumber(record, [
+    "room_id",
+    "roomId",
+    "id",
+    "room",
+  ]);
+  if (!roomId) return undefined;
+  const title =
+    findStringOrNumber(record, ["title", "name", "room_title", "summary"]) ||
+    `RoboNeo room ${roomId}`;
+  return {
+    roomId,
+    title,
+    type: findStringOrNumber(record, ["room_type", "type", "mode"]),
+    coverUrl: findStringOrNumber(record, [
+      "cover_url",
+      "coverUrl",
+      "thumbnail",
+      "image_url",
+      "url",
+    ]),
+    createdAt: findStringOrNumber(record, [
+      "created_at",
+      "create_time",
+      "createdAt",
+    ]),
+    updatedAt: findStringOrNumber(record, [
+      "updated_at",
+      "update_time",
+      "updatedAt",
+      "last_time",
+    ]),
+    raw: record,
+  };
+}
+
+function normalizeHistoryDetail(
+  roomId: string,
+  value: Record<string, unknown>,
+): RemoteHistoryDetail {
+  const payload = historyPayload(value);
+  const next = nextAction(payload);
+  return {
+    roomId,
+    title: findStringOrNumber(payload, ["title", "name", "room_title"]),
+    maxSeq: findNumber(payload, ["max_seq", "last_seq"]),
+    lastSeq: findNumber(payload, ["last_seq", "max_seq"]),
+    nextAction: next.action,
+    message: next.message || findStringOrNumber(payload, ["message", "msg"]),
+    artifacts: Array.isArray(payload.artifacts) ? payload.artifacts : undefined,
+    raw: payload,
+  };
+}
+
+function creditFromUserInfo(value: Record<string, unknown>): string | undefined {
+  return findStringOrNumber(value, [
+    "total_amount",
+    "amount",
+    "effective_amount",
+    "available_amount",
+    "balance",
+  ]);
+}
+
 export class RoboNeoRunner {
   private cancelled = new Set<string>();
-  private accountClient = new RoboNeoAccountClient();
 
   constructor(
     private storage: LocalProjectStorage,
@@ -234,6 +349,13 @@ export class RoboNeoRunner {
     return result;
   }
 
+  private async getRunKey(id?: string): Promise<ApiKeyRecord | null> {
+    if (id) return this.storage.getKey(id);
+    const keys = await this.storage.listKeys();
+    const active = keys.find((key) => key.status === "active") || keys[0];
+    return active ? this.storage.getKey(active.id) : null;
+  }
+
   async checkEnvironment(): Promise<{
     node: { ok: boolean; version?: string };
     cli: { ok: boolean; version?: string; installCommand: string };
@@ -269,16 +391,8 @@ export class RoboNeoRunner {
   async validateKey(id: string): Promise<{ ok: boolean; message: string }> {
     const key = await this.storage.getKey(id);
     if (!key) return { ok: false, message: "API key not found" };
-    let accountMessage = "Account API: valid";
     let cliMessage = "CLI: valid";
-    let accountValid = true;
     let cliValid = true;
-    try {
-      await this.accountClient.validateToken(key.apiKey);
-    } catch (error) {
-      accountValid = false;
-      accountMessage = `Account API: ${error instanceof Error ? error.message : String(error)}`;
-    }
     try {
       await this.command(
         `key-validation-${id}`,
@@ -292,8 +406,8 @@ export class RoboNeoRunner {
       cliMessage = `CLI: ${message}${/invalid or expired/i.test(message) ? " The saved value is expired or is not a CLI-compatible ROBONEO_ACCESS_KEY." : ""}`;
     }
     return {
-      ok: accountValid && cliValid,
-      message: `${accountMessage}\n${cliMessage}`,
+      ok: cliValid,
+      message: cliMessage,
     };
   }
 
@@ -311,7 +425,14 @@ export class RoboNeoRunner {
         keys: await this.storage.listKeys(),
       };
     try {
-      const balance = await this.accountClient.getCredit(key.apiKey);
+      const result = await this.command(
+        `key-credit-${id}`,
+        ["user-info"],
+        key.apiKey,
+        "validating_token",
+      );
+      const balance = creditFromUserInfo(parseJson(result.stdout));
+      if (!balance) throw new Error("RoboNeo CLI user-info did not return total_amount");
       const keys = await this.storage.saveKeyCredit(id, balance);
       return {
         ok: true,
@@ -327,6 +448,87 @@ export class RoboNeoRunner {
         keys: await this.storage.saveKeyCreditError(id, message),
       };
     }
+  }
+
+  async listRemoteHistory(keyId?: string): Promise<RemoteHistoryResult> {
+    const key = await this.getRunKey(keyId);
+    if (!key || key.status !== "active") {
+      return {
+        rooms: [],
+        message: "Select an active RoboNeo API key before loading history",
+      };
+    }
+    const result = await this.command(
+      "remote-history",
+      ["history"],
+      key.apiKey,
+      "polling",
+    );
+    const payload = parseJson(result.stdout);
+    const list = findArray(payload, ["list", "rooms", "records", "items"]) || [];
+    const rooms = list
+      .map(normalizeHistoryRoom)
+      .filter((room): room is RemoteHistoryRoom => Boolean(room));
+    return {
+      rooms,
+      totalCount: findNumber(payload, ["total_count", "totalCount", "total"]),
+      bottomDesc: findStringOrNumber(payload, ["bottom_desc", "bottomDesc"]),
+      message: `Loaded ${rooms.length} RoboNeo history room(s)`,
+    };
+  }
+
+  async importRemoteHistoryRoom(
+    roomId: string,
+    keyId?: string,
+  ): Promise<Project> {
+    const key = await this.getRunKey(keyId);
+    if (!key || key.status !== "active")
+      throw new Error("Select an active RoboNeo API key before importing history");
+    const existing = await this.storage.findProjectByRoomId(roomId);
+    const result = await this.command(
+      `remote-history-detail-${roomId}`,
+      ["history-detail", "-r", roomId],
+      key.apiKey,
+      "polling",
+    );
+    const detail = normalizeHistoryDetail(roomId, parseJson(result.stdout));
+    const name = detail.title || existing?.name || `RoboNeo room ${roomId}`;
+    const next: Project = existing
+      ? {
+          ...existing,
+          name,
+          apiKeyId: key.id,
+          roomId,
+          status: detail.nextAction === "reply" ? "waiting_reply" : existing.status,
+          lastSeq: detail.maxSeq ?? existing.lastSeq,
+          remoteHistory: detail,
+        }
+      : {
+          id: `${Date.now()}-${roomId}`.replace(/[^a-zA-Z0-9-]/g, "-"),
+          name,
+          mode: "text_to_video",
+          brief: detail.message || "",
+          mood: "Imported from RoboNeo history",
+          duration: 8,
+          language: "en",
+          aspectRatio: "9:16",
+          resolution: "1080x1920",
+          apiKeyId: key.id,
+          assets: {},
+          finalPrompt: detail.message || "",
+          roomId,
+          status: detail.nextAction === "done" ? "completed" : detail.nextAction === "reply" ? "waiting_reply" : "running",
+          outputFiles: [],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          lastSeq: detail.maxSeq,
+          remoteHistory: detail,
+        };
+    const saved = existing
+      ? await this.updateProject(next)
+      : await this.storage.createProject(next);
+    this.send("roboneo:project-updated", saved);
+    return saved;
   }
 
   async saveKeyToConfig(id: string): Promise<{ ok: boolean; message: string }> {
@@ -473,6 +675,11 @@ export class RoboNeoRunner {
           findString(payload, ["max_seq", "last_seq"]) ??
           lastSeq,
       );
+      project = await this.updateProject({
+        ...project,
+        lastSeq,
+        remoteHistory: normalizeHistoryDetail(project.roomId!, parseJson(result.stdout)),
+      });
       const next = nextAction(payload);
       const action = next.action;
 
@@ -494,6 +701,7 @@ export class RoboNeoRunner {
         await this.updateProject({
           ...project,
           status: "waiting_reply",
+          lastSeq,
           pendingReply: { requestId, message: payload.message },
         });
         this.state(project.id, "waiting_reply", false, project.roomId, lastSeq);
@@ -543,7 +751,27 @@ export class RoboNeoRunner {
       key.apiKey,
       "sending_prompt",
     );
-    await this.poll(project, key.apiKey, 0);
+    await this.poll(project, key.apiKey, project.lastSeq || 0);
+  }
+
+  async continue(projectId: string): Promise<void> {
+    this.cancelled.delete(projectId);
+    const project = await this.storage.getProject(projectId);
+    if (!project?.roomId || !project.apiKeyId)
+      throw new Error("Project does not have a RoboNeo room to continue");
+    const key = await this.storage.getKey(project.apiKeyId);
+    if (!key || key.status !== "active")
+      throw new Error("Select an active RoboNeo API key");
+    const running = await this.updateProject({
+      ...project,
+      status: "running",
+      error: undefined,
+    });
+    if (project.status === "completed") {
+      await this.download(running, key.apiKey);
+      return;
+    }
+    await this.poll(running, key.apiKey, running.lastSeq || 0);
   }
 
   private async download(project: Project, token: string): Promise<void> {

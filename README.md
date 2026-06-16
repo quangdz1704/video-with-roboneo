@@ -65,6 +65,8 @@ Settings and encrypted key records use Electron's per-app `userData/config` dire
 7. The app creates a room, sends the prompt/assets, polls `history-detail`, handles follow-up replies, and downloads artifacts when complete.
 8. Preview the MP4 or open its local folder.
 
+The **Projects & history** page can also load cloud room history through the RoboNeo CLI `history` command. Imported rooms keep their `roomId`, last known sequence, and raw `history-detail` payload so they can be refreshed, continued, or downloaded locally from the terminal view.
+
 ## Generation modes
 
 The studio provides four workflows. RoboNeo CLI exposes these capabilities through the same natural-language `chat` command; the app changes the optimized prompt and attachments:
@@ -82,7 +84,13 @@ create-room -> chat -> history-detail polling -> download
 
 ## Carrot credits
 
-The **API Keys** page can load one key's balance or refresh all keys. Credit lookup uses the locally stored key as the Meitu `Access-Token`, resolves the account UID, then reads `parameter.total_amount` from RoboNeo's `vipshow` response.
+The **API Keys** page can load one key's balance or refresh all keys. Credit lookup uses the selected key only through the RoboNeo CLI:
+
+```text
+roboneo user-info
+```
+
+The app reads `total_amount` from that JSON response. It does not call Meitu account or RoboNeo gateway endpoints directly for validation, credit, history, chat, reply, or downloads; those paths all go through the CLI.
 
 Cookies, browser refresh tokens, and copied browser-session tracking values are not stored or required by the app. Only the carrot balance, refresh time, and a possible error message are persisted.
 
