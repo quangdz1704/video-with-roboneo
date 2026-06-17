@@ -200,6 +200,15 @@ export class LocalProjectStorage {
     return destination
   }
 
+  async copyAttachment(projectId: string, source: string): Promise<string> {
+    const ext = path.extname(source).toLowerCase()
+    const basename = path.basename(source, ext).replace(/[^a-zA-Z0-9-_]+/g, '-').slice(0, 80) || 'attachment'
+    const destination = path.join(this.projectDir(projectId), 'attachments', `${Date.now()}-${basename}${ext}`)
+    await mkdir(path.dirname(destination), { recursive: true })
+    await copyFile(source, destination)
+    return destination
+  }
+
   private fallbackKey(): Buffer {
     return createHash('sha256').update(`${app.getPath('userData')}:${os.hostname()}:RoboNeoTikTokStudio`).digest()
   }

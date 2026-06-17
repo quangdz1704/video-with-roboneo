@@ -11,8 +11,13 @@ import type {
   RemoteHistoryDetail,
   RemoteHistoryResult,
   RemoteHistoryRoom,
+  ChatAttachment,
+  ChatAttachmentKind,
+  SendChatInput,
+  StoredChatMessage,
 } from "../../shared/types";
 import { LocalProjectStorage } from "../storage/localProjectStorage";
+import { LocalStudioDatabase } from "../storage/localStudioDatabase";
 import { ProcessManager, type CommandResult } from "./processManager";
 
 type HistoryPayload = Record<string, unknown> & {
@@ -227,17 +232,55 @@ function creditFromUserInfo(value: Record<string, unknown>): string | undefined 
   ]);
 }
 
+function chatMessagesFromHistory(projectId: string, roomId: string | undefined, value: Record<string, unknown>): StoredChatMessage[] {
+  const payload = historyPayload(value)
+  const items = Array.isArray(payload.items) ? payload.items : []
+  return items.flatMap((item) => {
+    const record = asRecord(item)
+    if (!record) return []
+    const roleRaw = findStringOrNumber(record, ["role"]) || "assistant"
+    const role: StoredChatMessage["role"] = roleRaw === "user" ? "user" : roleRaw === "system" ? "system" : "assistant"
+    const content = findStringOrNumber(record, ["content", "text", "message", "title"]) || ""
+    const seq = findStringOrNumber(record, ["seq", "id", "block_id"]) || randomKey()
+    const createdAtRaw = findStringOrNumber(record, ["create_time", "created_at", "createdAt"])
+    const createdAt = createdAtRaw && /^\d+$/.test(createdAtRaw)
+      ? new Date(Number(createdAtRaw) * (createdAtRaw.length === 10 ? 1000 : 1)).toISOString()
+      : createdAtRaw || new Date().toISOString()
+    if (!content && !Array.isArray(record.artifacts)) return []
+    return [{
+      id: `${projectId}:${roomId || "room"}:${seq}`,
+      projectId,
+      roomId,
+      role,
+      content,
+      attachments: [],
+      raw: record,
+      createdAt,
+    }]
+  })
+}
+
+function randomKey(): string {
+  return Math.random().toString(36).slice(2)
+}
+
 export class RoboNeoRunner {
   private cancelled = new Set<string>();
 
   constructor(
     private storage: LocalProjectStorage,
+    private database: LocalStudioDatabase,
     private processes: ProcessManager,
     private getWindow: () => BrowserWindow | null,
   ) {}
 
   private send(channel: string, payload: unknown): void {
     this.getWindow()?.webContents.send(channel, payload);
+  }
+
+  private async emitChatMessage(message: Omit<StoredChatMessage, "id" | "createdAt"> & { id?: string; createdAt?: string }): Promise<void> {
+    const saved = await this.database.addChatMessage(message)
+    this.send("roboneo:chat-message", saved)
   }
 
   private log(
@@ -254,6 +297,7 @@ export class RoboNeoRunner {
       message,
       step,
     };
+    void this.database.addLog(entry)
     this.send("roboneo:log", entry);
   }
 
@@ -638,6 +682,38 @@ export class RoboNeoRunner {
         if (project.assets.secondImage)
           args.push("--image-file", project.assets.secondImage);
       }
+      const initialAttachments: ChatAttachment[] = [];
+      if (project.assets.characterImage) {
+        initialAttachments.push({
+          id: `${projectId}:characterImage`,
+          kind: "image",
+          path: project.assets.characterImage,
+          name: path.basename(project.assets.characterImage),
+        });
+      }
+      if (project.assets.secondImage) {
+        initialAttachments.push({
+          id: `${projectId}:secondImage`,
+          kind: "image",
+          path: project.assets.secondImage,
+          name: path.basename(project.assets.secondImage),
+        });
+      }
+      if (project.assets.referenceVideo) {
+        initialAttachments.push({
+          id: `${projectId}:referenceVideo`,
+          kind: "video",
+          path: project.assets.referenceVideo,
+          name: path.basename(project.assets.referenceVideo),
+        });
+      }
+      await this.emitChatMessage({
+        projectId,
+        roomId,
+        role: "user",
+        content: project.finalPrompt!,
+        attachments: initialAttachments,
+      });
       await this.command(projectId, args, key.apiKey, "sending_prompt");
       await this.storage.markKeyUsed(key.id);
       await this.poll(project, key.apiKey, 0);
@@ -680,6 +756,9 @@ export class RoboNeoRunner {
         lastSeq,
         remoteHistory: normalizeHistoryDetail(project.roomId!, parseJson(result.stdout)),
       });
+      for (const message of chatMessagesFromHistory(project.id, project.roomId, parseJson(result.stdout))) {
+        await this.emitChatMessage(message)
+      }
       const next = nextAction(payload);
       const action = next.action;
 
@@ -751,6 +830,82 @@ export class RoboNeoRunner {
       key.apiKey,
       "sending_prompt",
     );
+    await this.emitChatMessage({
+      projectId,
+      roomId: project.roomId,
+      role: "user",
+      content: reply,
+      attachments: [],
+    })
+    await this.poll(project, key.apiKey, project.lastSeq || 0);
+  }
+
+  async sendChatMessage(input: SendChatInput): Promise<void> {
+    this.cancelled.delete(input.projectId);
+    let project = await this.storage.getProject(input.projectId);
+    if (!project?.roomId || !project.apiKeyId)
+      throw new Error("Project does not have a RoboNeo room to chat in");
+    const key = await this.storage.getKey(project.apiKeyId);
+    if (!key || key.status !== "active")
+      throw new Error("Select an active RoboNeo API key");
+    const message = input.message.trim();
+    const attachmentPaths = input.attachmentPaths || [];
+    if (!message && !attachmentPaths.length)
+      throw new Error("Enter a message or attach a file");
+
+    const args = project.pendingReply
+      ? [
+          "reply",
+          "-r",
+          project.roomId,
+          "--last-request-id",
+          project.pendingReply.requestId,
+          "-p",
+          message,
+          "--lang",
+          project.language,
+        ]
+      : [
+          "chat",
+          "-p",
+          message,
+          "--lang",
+          project.language,
+          "--room-id",
+          project.roomId,
+        ];
+    for (const file of attachmentPaths) {
+      if (/\.(png|jpe?g|webp)$/i.test(file)) args.push("--image-file", file);
+      else if (/\.(mp4|mov)$/i.test(file)) args.push("--video-file", file);
+      else args.push("--file", file);
+    }
+
+    project = await this.updateProject({
+      ...project,
+      status: "running",
+      pendingReply: undefined,
+      error: undefined,
+    });
+    await this.emitChatMessage({
+      projectId: project.id,
+      roomId: project.roomId,
+      role: "user",
+      content: message,
+      attachments: attachmentPaths.map((file) => {
+        const kind: ChatAttachmentKind = /\.(png|jpe?g|webp)$/i.test(file)
+          ? "image"
+          : /\.(mp4|mov)$/i.test(file)
+            ? "video"
+            : "file";
+        return {
+          id: `${Date.now()}-${Math.random()}`,
+          kind,
+          path: file,
+          name: path.basename(file),
+        };
+      }),
+    });
+    await this.command(project.id, args, key.apiKey, "sending_prompt");
     await this.poll(project, key.apiKey, project.lastSeq || 0);
   }
 

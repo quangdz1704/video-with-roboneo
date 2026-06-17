@@ -56,6 +56,27 @@ export interface ProjectAssets {
   referenceVideo?: string;
 }
 
+export type ChatAttachmentKind = "image" | "video" | "file";
+
+export interface ChatAttachment {
+  id: string;
+  kind: ChatAttachmentKind;
+  path?: string;
+  url?: string;
+  name: string;
+}
+
+export interface StoredChatMessage {
+  id: string;
+  projectId: string;
+  roomId?: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  attachments: ChatAttachment[];
+  raw?: unknown;
+  createdAt: string;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -147,6 +168,17 @@ export interface AssetSelection {
   slot: keyof ProjectAssets;
 }
 
+export interface ChatAttachmentSelection {
+  kind: ChatAttachmentKind;
+  projectId: string;
+}
+
+export interface SendChatInput {
+  projectId: string;
+  message: string;
+  attachmentPaths?: string[];
+}
+
 export interface SaveApiKeyInput {
   id?: string;
   label: string;
@@ -164,6 +196,9 @@ export interface RoboNeoBridge {
   updateProject(project: Project): Promise<Project>;
   deleteProject(id: string): Promise<void>;
   selectAsset(input: AssetSelection): Promise<string | null>;
+  selectChatAttachment(
+    input: ChatAttachmentSelection,
+  ): Promise<ChatAttachment | null>;
   listKeys(): Promise<MaskedApiKey[]>;
   saveKey(input: SaveApiKeyInput): Promise<MaskedApiKey[]>;
   deleteKey(id: string): Promise<MaskedApiKey[]>;
@@ -185,11 +220,15 @@ export interface RoboNeoBridge {
   }>;
   runProject(projectId: string): Promise<void>;
   continueProject(projectId: string): Promise<void>;
+  sendChatMessage(input: SendChatInput): Promise<void>;
   cancelProject(projectId: string): Promise<void>;
   replyToProject(projectId: string, reply: string): Promise<void>;
   openOutputFolder(projectId: string): Promise<void>;
   openPath(path: string): Promise<void>;
+  getProjectLogs(projectId: string): Promise<LogEntry[]>;
+  getProjectChatMessages(projectId: string): Promise<StoredChatMessage[]>;
   onLog(callback: (entry: LogEntry) => void): () => void;
+  onChatMessage(callback: (message: StoredChatMessage) => void): () => void;
   onJobState(callback: (state: JobState) => void): () => void;
   onProjectUpdated(callback: (project: Project) => void): () => void;
 }

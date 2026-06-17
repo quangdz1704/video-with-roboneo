@@ -2,6 +2,7 @@ import { app, BrowserWindow, net, protocol } from 'electron'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { LocalProjectStorage } from './storage/localProjectStorage'
+import { LocalStudioDatabase } from './storage/localStudioDatabase'
 import { ProcessManager } from './cli/processManager'
 import { RoboNeoRunner } from './cli/roboneoRunner'
 import { registerIpc } from './ipc'
@@ -64,7 +65,9 @@ app.whenReady().then(async () => {
   process.on('uncaughtException', (error) => logger.error('main:uncaughtException', error))
   process.on('unhandledRejection', (reason) => logger.error('main:unhandledRejection', reason))
   const storage = new LocalProjectStorage()
+  const database = new LocalStudioDatabase()
   await storage.init()
+  await database.init()
   protocol.handle('roboneo-asset', async (request) => {
     const filePath = new URL(request.url).searchParams.get('path')
     if (!filePath || !(await storage.canReadAsset(filePath))) {
@@ -72,8 +75,8 @@ app.whenReady().then(async () => {
     }
     return net.fetch(pathToFileURL(filePath).toString())
   })
-  const runner = new RoboNeoRunner(storage, new ProcessManager(), () => mainWindow)
-  registerIpc(storage, runner)
+  const runner = new RoboNeoRunner(storage, database, new ProcessManager(), () => mainWindow)
+  registerIpc(storage, database, runner)
   await createWindow()
   logger.info('app', 'Main window ready')
   app.on('activate', () => {

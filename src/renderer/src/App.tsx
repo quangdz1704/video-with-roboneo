@@ -53,6 +53,9 @@ export default function App(): JSX.Element {
     setKeys,
     setSettings,
     addLog,
+    addChatMessage,
+    setLogs,
+    setChatMessages,
     setJob,
     upsertProject,
     setHydrated,
@@ -66,13 +69,25 @@ export default function App(): JSX.Element {
       setProjects(projects);
       setKeys(keys);
       setSettings(settings);
+      void Promise.all(
+        projects.map(async (project) => {
+          const [logs, messages] = await Promise.all([
+            window.roboneo.getProjectLogs(project.id),
+            window.roboneo.getProjectChatMessages(project.id),
+          ]);
+          setLogs(project.id, logs);
+          setChatMessages(project.id, messages);
+        }),
+      );
       setHydrated(true);
     });
     const offLog = window.roboneo.onLog(addLog);
+    const offChat = window.roboneo.onChatMessage(addChatMessage);
     const offJob = window.roboneo.onJobState(setJob);
     const offProject = window.roboneo.onProjectUpdated(upsertProject);
     return () => {
       offLog();
+      offChat();
       offJob();
       offProject();
     };
@@ -81,6 +96,9 @@ export default function App(): JSX.Element {
     setKeys,
     setSettings,
     addLog,
+    addChatMessage,
+    setLogs,
+    setChatMessages,
     setJob,
     upsertProject,
     setHydrated,

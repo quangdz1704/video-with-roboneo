@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { LogEntry, Project, RoboNeoBridge, JobState } from '../shared/types'
+import type { LogEntry, Project, RoboNeoBridge, JobState, StoredChatMessage } from '../shared/types'
 
 window.addEventListener('error', (event) => {
   ipcRenderer.send('renderer:error', {
@@ -28,6 +28,7 @@ const bridge: RoboNeoBridge = {
   updateProject: (project) => ipcRenderer.invoke('projects:update', project),
   deleteProject: (id) => ipcRenderer.invoke('projects:delete', id),
   selectAsset: (input) => ipcRenderer.invoke('assets:select', input),
+  selectChatAttachment: (input) => ipcRenderer.invoke('chat-attachments:select', input),
   listKeys: () => ipcRenderer.invoke('keys:list'),
   saveKey: (input) => ipcRenderer.invoke('keys:save', input),
   deleteKey: (id) => ipcRenderer.invoke('keys:delete', id),
@@ -39,14 +40,22 @@ const bridge: RoboNeoBridge = {
   checkEnvironment: () => ipcRenderer.invoke('environment:check'),
   runProject: (id) => ipcRenderer.invoke('job:run', id),
   continueProject: (id) => ipcRenderer.invoke('job:continue', id),
+  sendChatMessage: (input) => ipcRenderer.invoke('job:chat', input),
   cancelProject: (id) => ipcRenderer.invoke('job:cancel', id),
   replyToProject: (id, reply) => ipcRenderer.invoke('job:reply', id, reply),
   openOutputFolder: (id) => ipcRenderer.invoke('output:open', id),
   openPath: (path) => ipcRenderer.invoke('path:open', path),
+  getProjectLogs: (id) => ipcRenderer.invoke('logs:list', id),
+  getProjectChatMessages: (id) => ipcRenderer.invoke('chat:list', id),
   onLog: (callback) => {
     const listener = (_event: Electron.IpcRendererEvent, entry: LogEntry) => callback(entry)
     ipcRenderer.on('roboneo:log', listener)
     return () => ipcRenderer.removeListener('roboneo:log', listener)
+  },
+  onChatMessage: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, message: StoredChatMessage) => callback(message)
+    ipcRenderer.on('roboneo:chat-message', listener)
+    return () => ipcRenderer.removeListener('roboneo:chat-message', listener)
   },
   onJobState: (callback) => {
     const listener = (_event: Electron.IpcRendererEvent, state: JobState) => callback(state)

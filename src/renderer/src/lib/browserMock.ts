@@ -63,6 +63,7 @@ export function createBrowserMock(): RoboNeoBridge {
       projects = projects.filter((item) => item.id !== id);
     },
     selectAsset: async () => null,
+    selectChatAttachment: async () => null,
     listKeys: async () => keys,
     saveKey: async (input) => {
       const id = input.id || crypto.randomUUID();
@@ -158,11 +159,15 @@ export function createBrowserMock(): RoboNeoBridge {
     }),
     runProject: async () => undefined,
     continueProject: async () => undefined,
+    sendChatMessage: async () => undefined,
     cancelProject: async () => undefined,
     replyToProject: async () => undefined,
     openOutputFolder: async () => undefined,
     openPath: async () => undefined,
+    getProjectLogs: async () => [],
+    getProjectChatMessages: async () => [],
     onLog: () => () => undefined,
+    onChatMessage: () => () => undefined,
     onJobState: () => () => undefined,
     onProjectUpdated: () => () => undefined,
   };
